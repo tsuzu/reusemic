@@ -2,87 +2,101 @@
 
 [![CI](https://github.com/tsuzu/reusemic/actions/workflows/ci.yml/badge.svg)](https://github.com/tsuzu/reusemic/actions/workflows/ci.yml)
 
-NVIDIA の RE-USE 系音声強調モデルでマイク音声をリアルタイムにノイズ除去し、macOS の仮想マイク **「ReuseMic」** として提供します。Zoom / Meet / Discord / OBS などで入力デバイスに「ReuseMic」を選ぶだけで使えます。
+Real-time noise suppression for your microphone with NVIDIA's RE-USE speech enhancement models, published on macOS as a virtual microphone called **ReuseMic**. Pick "ReuseMic" as the input device in Zoom, Meet, Discord, OBS or any other app.
 
-- BlackHole などの外部ツールは不要です(仮想デバイスは同梱の HAL プラグインが提供します)。
-- Python は使いません。ドライバは C、アプリは Rust です。推論は [reuse-rs](https://github.com/altunenes/re-use-rs) を使い、CPU 上で Accelerate を使って動きます。
-- 実行時に必要なのは、アプリのバイナリ、ドライバ、重みファイルだけです。
+- No third-party tools such as BlackHole: the virtual device comes from the bundled HAL plug-in.
+- No Python: the driver is written in C and the app in Rust. Inference runs on the CPU (via Accelerate) through [reuse-rs](https://github.com/altunenes/re-use-rs).
+- At runtime you only need the app binary, the driver and the model weights.
 
-## モデルについて
+## The model
 
-[nvidia/RE-USE](https://huggingface.co/nvidia/RE-USE) は双方向 Mamba のオフラインモデルで、数秒単位でまとめて処理する前提になっています。そのため、リアルタイムのマイクには同じ系列のストリーミング版 [nvidia/Real-time_RE-USE](https://huggingface.co/nvidia/Real-time_RE-USE)(因果的、20 ms フレーム)を使います。
+[nvidia/RE-USE](https://huggingface.co/nvidia/RE-USE) is an offline model built on bidirectional Mamba, and it expects several seconds of audio at a time. For a live microphone, reusemic uses the streaming model from the same family, [nvidia/Real-time_RE-USE](https://huggingface.co/nvidia/Real-time_RE-USE), which is causal and works in 20 ms frames.
 
-> 重みのライセンスは NVIDIA One-Way Noncommercial License(研究・非商用のみ)です。
+> The weights are licensed under the NVIDIA One-Way Noncommercial License (research and non-commercial use only).
 
-## 仕組み
+## How it works
 
 ```
-物理マイク ──IOProc──▶ [reusemic]
-                         48k→16k リサンプル → Real-time RE-USE → 16k→48k(クロックずれ補正付き)
-                                   │
-                                   ▼ IOProc (出力)
-                 ┌──────── ReuseMic.driver (HAL プラグイン) ────────┐
-                 │  "ReuseMic Feed"(非表示の出力) ─ring buffer─▶ "ReuseMic"(入力) │
-                 └────────────────────────────────────────────────────┘
-                                   │
-                                   ▼
-                          Zoom / Meet / Discord …
+physical mic ──IOProc──▶ [reusemic]
+                           resample 48k→16k → Real-time RE-USE → resample 16k→48k (drift-corrected)
+                                     │
+                                     ▼ IOProc (output)
+                 ┌──────────── ReuseMic.driver (HAL plug-in) ────────────┐
+                 │  "ReuseMic Feed" (hidden output) ─ring buffer─▶ "ReuseMic" (input) │
+                 └────────────────────────────────────────────────────────┘
+                                     │
+                                     ▼
+                            Zoom / Meet / Discord …
 ```
 
-- 2 つのデバイスは同じクロックとリングバッファを共有しています。フィードにサンプル時刻 T で書いた音は、マイク側の時刻 T でそのまま読めます。
-- reusemic が止まっている間、ReuseMic は無音になります。
-- 物理マイクと仮想デバイスのクロックのずれは、出力側リサンプラの比率をわずかに調整して吸収します(最大 ±0.5%)。
+- The two devices share one clock and one ring buffer. Audio written to the feed at sample time T is read back by the mic at sample time T.
+- While reusemic is not running, ReuseMic outputs silence.
+- Clock drift between the physical mic and the virtual device is absorbed by nudging the output resampler's ratio slightly (at most ±0.5%).
 
-## 必要なもの
+## Requirements
 
-- macOS 11 以降(Apple Silicon 推奨)
-- Xcode Command Line Tools(`clang`、`codesign`)
-- Rust(`cargo`)
+- macOS 11 or later (Apple Silicon recommended)
+- Xcode Command Line Tools (`clang`, `codesign`)
+- Rust (`cargo`)
 
-## ビルドとインストール
+## Build and install
 
 ```sh
-make            # ドライバとアプリをビルド
-make model      # 重み(約 54 MB)を models/ にダウンロード
-make test       # ドライバとユニットのテスト
-make install    # ドライバを /Library/Audio/Plug-Ins/HAL に入れて coreaudiod を再起動(sudo)
+make            # build the driver and the app
+make model      # download the weights (~54 MB) into models/
+make test       # driver and unit tests
+make install    # copy the driver to /Library/Audio/Plug-Ins/HAL and restart coreaudiod (sudo)
 ```
 
-## 使い方
+## Usage
 
 ```sh
-./target/release/reusemic --list                 # デバイス一覧
-./target/release/reusemic                        # 既定の入力デバイスをノイズ除去して ReuseMic に出す
-./target/release/reusemic --input "MacBook Pro"  # マイクを指定
+./target/release/reusemic --list                 # list audio devices
+./target/release/reusemic                        # enhance the default input device into ReuseMic
+./target/release/reusemic --input "MacBook Pro"  # pick a specific microphone
 ```
 
-あとは通話アプリの入力デバイスに **ReuseMic** を選んでください。初回起動時に、ターミナルへのマイク許可を求められます。
+Then select **ReuseMic** as the input device in your call app. The first run asks for microphone permission for your terminal.
 
-実行中の操作:`b` + Enter でバイパス(素の音声との聴き比べ)の切り替え、`q` + Enter で終了します。
+### Which microphone is used
 
-| オプション | 既定値 | 説明 |
+By default reusemic captures the system default input device (System Settings → Sound → Input). If the default input is ReuseMic itself, it falls back to the built-in microphone, then to the first input device it finds. Use `--input` with part of a device name or UID (case-insensitive) to choose another one. The `input : ...` line printed at startup shows the device in use.
+
+For the cleanest setup, leave the system default input on your physical mic and choose ReuseMic only in the apps that should get the enhanced audio.
+
+### Keys while running
+
+- `b` + Enter toggles bypass, to compare against the raw mic.
+- `q` + Enter quits.
+
+### Options
+
+| Option | Default | Description |
 |---|---|---|
-| `--layers 3-12` | 4 | Mamba の層数。多いほど高品質で重くなります |
-| `--look-ahead 0-2` | 0 | 先読みするフレーム数。1 フレームにつき遅延が 20 ms 増えます |
-| `--rate` | 16000 | モデルを動かすサンプルレート。48000 にすると CPU 負荷が約 3 倍になります |
-| `--buffer ms` | 60 | 出力側のジッタバッファ。アンダーランが出るなら増やしてください |
-| `--channel n` | 0 | 複数チャンネルのマイクで使うチャンネル |
-| `--model path` | 自動 | 重みファイルのパス |
-| `--file in.wav out.wav` | | ライブと同じ処理をファイルにかけて確認します |
-| `--probe` | | ReuseMic に届いている音量を表示します |
-| `--probe-wav out.wav` | | 同上、届いた音声を wav に保存します |
-| `--test-tone` | | マイクの代わりに 440 Hz の音を流します(経路の確認用。モデルを通すと消えるので `--bypass` と併用) |
+| `--input name` | system default | Microphone to enhance (name or UID, substring match) |
+| `--layers 3-12` | 4 | Number of Mamba layers: more is higher quality but heavier |
+| `--look-ahead 0-2` | 0 | Future frames the model may use; each one adds 20 ms of latency |
+| `--rate` | 16000 | Sample rate the model runs at; 48000 needs about 3× the CPU |
+| `--buffer ms` | 60 | Output jitter buffer; raise it if you see underruns |
+| `--channel n` | 0 | Channel to use on multi-channel microphones (0-based) |
+| `--model path` | auto | Path to the weights file |
+| `--bypass` | | Start with enhancement off |
+| `--quiet` | | No status line |
+| `--file in.wav out.wav` | | Run a wav through the same pipeline as the live path |
+| `--probe` | | Print the level arriving at the ReuseMic input |
+| `--probe-wav out.wav` | | Same, and save what arrived as a wav |
+| `--test-tone` | | Replace the mic with a 440 Hz tone to check the path (the model removes it, so combine with `--bypass`) |
 
-ステータス行の `model xx ms/frame` が 20 ms を下回っていれば、リアルタイムに間に合っています。遅延の目安は「バッファ + 20 ms + 先読み + デバイスバッファ」で、既定値ならおよそ 90 ms です。
+When `model xx ms/frame` in the status line stays under 20 ms, processing keeps up in real time. Latency is roughly buffer + 20 ms + look-ahead + device buffers, about 90 ms with the defaults.
 
-## アンインストール
+## Uninstall
 
 ```sh
 make uninstall
 ```
 
-## ライセンス
+## License
 
-このリポジトリのコードは [MIT](LICENSE-MIT) または [Apache-2.0](LICENSE-APACHE) のどちらかを選んで利用できるデュアルライセンスです。
+The code in this repository is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
 
-モデルの重み([nvidia/Real-time_RE-USE](https://huggingface.co/nvidia/Real-time_RE-USE))はこのリポジトリに含めていません。`make model` で NVIDIA の配布元から取得し、**NVIDIA One-Way Noncommercial License (NSCLv1)** の下で利用します(研究・非商用のみ)。重みを使った成果物にはこのライセンス条件がかかるので注意してください。
+The model weights ([nvidia/Real-time_RE-USE](https://huggingface.co/nvidia/Real-time_RE-USE)) are not included. `make model` downloads them from NVIDIA's distribution, and they are used under the **NVIDIA One-Way Noncommercial License (NSCLv1)**, which allows research and non-commercial use only. Keep that license in mind for anything you produce with the weights.
