@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --release --all-targets -- -D warnings
+
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build driver and app
+        run: make all
+
+      - name: Verify driver bundle
+        run: |
+          codesign --verify --verbose build/ReuseMic.driver
+          plutil -lint build/ReuseMic.driver/Contents/Info.plist
+          lipo -archs build/ReuseMic.driver/Contents/MacOS/ReuseMic
+
+      - name: Driver + unit tests
+        run: make test
+
+      - name: Cache model weights
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: model-Real-time_RE-USE-v1
+
+      - name: Download model
+        run: make model
+
+      - name: Pipeline smoke test (wav through resample -> RE-USE -> resample)
+        run: |
+          mkdir -p build/smoke
+          say -o build/smoke/speech.aiff "This is a test of the reuse microphone."
+          afconvert -f WAVE -d LEI16@44100 build/smoke/speech.aiff build/smoke/in.wav
+          ./target/release/reusemic --file build/smoke/in.wav build/smoke/out.wav
+          afinfo build/smoke/out.wav | tee build/smoke/info.txt
+          grep -q "48000 Hz" build/smoke/info.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reusemic-macos
+          path: |
+            target/release/reusemic
+            build/ReuseMic.driver
+            build/smoke/out.wav
+          if-no-files-found: error

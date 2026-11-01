@@ -1,0 +1,16 @@
+[package]
+name = "reusemic"
+version = "0.1.0"
+edition = "2021"
+description = "Real-time speech enhancement (NVIDIA Real-time RE-USE) as a macOS virtual microphone"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/tsuzu/reusemic"
+
+[dependencies]
+eyre = "0.6"
+rayon = "1"
+reuse-rs = "0.4"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
