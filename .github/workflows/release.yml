@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != v$version"; exit 1; }
+
+      - name: Test
+        run: make test
+
+      - name: Build release archive
+        run: make dist
+
+      - name: Verify archive
+        run: |
+          cd build/dist
+          shasum -a 256 -c *.zip.sha256
+          rm -rf check && mkdir check && ditto -x -k *.zip check
+          dir=$(ls -d check/reusemic-*)
+          lipo -archs "$dir/reusemic" | grep -q x86_64
+          lipo -archs "$dir/reusemic" | grep -q arm64
+          lipo -archs "$dir/ReuseMic.driver/Contents/MacOS/ReuseMic" | grep -q x86_64
+          codesign --verify "$dir/reusemic" "$dir/ReuseMic.driver"
+          test -x "$dir/install.sh"
+          "$dir/reusemic" --help > /dev/null
+          ls -la "$dir"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-archive
+          path: build/dist/*.zip*
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/dist/*.zip build/dist/*.zip.sha256 \
+            --title "reusemic $GITHUB_REF_NAME" --generate-notes \
+            --notes-file - <<'NOTES'
+          ## Install
+
+          ```sh
+          unzip reusemic-*-macos-universal.zip
+          cd reusemic-*-macos-universal
+          ./install.sh   # installs the driver + binary (sudo) and downloads the model weights
+          reusemic --list
+          reusemic       # then pick "ReuseMic" as the input device in your app
+          ```
+
+          The model weights (nvidia/Real-time_RE-USE) are downloaded from Hugging Face by `install.sh`
+          and are licensed under the NVIDIA One-Way Noncommercial License (non-commercial use only).
+          The binaries are ad-hoc signed, not notarized; `install.sh` removes the quarantine flag.
+          NOTES

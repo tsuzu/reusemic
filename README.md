@@ -39,7 +39,20 @@ physical mic ──IOProc──▶ [reusemic]
 - Xcode Command Line Tools (`clang`, `codesign`)
 - Rust (`cargo`)
 
-## Build and install
+## Install from a release
+
+Download `reusemic-<version>-macos-universal.zip` from [Releases](https://github.com/tsuzu/reusemic/releases), then:
+
+```sh
+unzip reusemic-*-macos-universal.zip
+cd reusemic-*-macos-universal
+./install.sh   # driver -> /Library/Audio/Plug-Ins/HAL, binary -> /usr/local/bin (sudo), model -> ~/Library/Application Support/reusemic
+reusemic --list
+```
+
+The binaries are ad-hoc signed and not notarized; `install.sh` removes the quarantine flag. `./uninstall.sh` removes everything again (`--all` also deletes the model).
+
+## Build from source
 
 ```sh
 make            # build the driver and the app
